@@ -1,0 +1,23 @@
+
+ 
+ --------------------- 
+ TEST on GNR 
+ Test on T: PASSED 
+ Test on charge: PASSED 
+ --------------------- 
+ TEST on graphene 
+ Test on T for null field: PASSED 
+ Test on T for not-zero field: PASSED 
+ --------------------- 
+ TEST on bilayer 
+ Test 1: PASSED 
+ Test 2: PASSED 
+ Test 3: PASSED 
+ Test 4: PASSED 
+ --------------------- 
+ TEST on nanowire 
+ 
+ TEST on nanowire with non-zero electric field 
+ Si PASSED 
+Ge PASSED 
+InAs PASSED 

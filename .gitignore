@@ -1,0 +1,18 @@
+# Build artifacts
+*.o
+*.so
+*.mod
+__pycache__/
+*.pyc
+
+# Runtime output
+*.ini
+*.out
+output/
+
+# IDE
+.idea/
+.vscode/
+
+# Thatte-specific simulation scripts (not part of upstream)
+thatte_*.py
