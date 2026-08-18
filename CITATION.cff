@@ -1,0 +1,49 @@
+cff-version: 1.2.0
+title: "NanoTCAD ViDES, ported to Python 3.13, NumPy 2.x and GCC 14"
+message: >-
+  This citation covers the compatibility PORT only. If you use
+  NanoTCAD ViDES for scientific work, please cite the original
+  authors, Gianluca Fiori and Giuseppe Iannaccone of the
+  University of Pisa, as given under references below.
+type: software
+authors:
+  - family-names: Thatte
+    given-names: Manish Jagdish
+    orcid: "https://orcid.org/0009-0003-8050-1242"
+    affiliation: maniTLab, Nashik, Maharashtra, India
+    email: manish@manitlab.org
+repository-code: "https://github.com/manishthatte/NanoTCAD_ViDES"
+url: "http://vides.nanotcad.com/vides/"
+abstract: >-
+  A compatibility port of NanoTCAD ViDES, the self-consistent
+  NEGF and Poisson solver for nanoscale device simulation
+  developed by Gianluca Fiori and Giuseppe Iannaccone at the
+  University of Pisa. The original targets Python 2.7 and the
+  NumPy 1.x C API and does not build on current systems; this
+  port updates the C extension to the Python 3 and NumPy 2.x
+  APIs and to GCC 14, leaving the physics untouched. All
+  scientific content is the work of the original authors.
+keywords:
+  - NEGF
+  - TCAD
+  - device simulation
+  - quantum transport
+  - Python 3 port
+  - software preservation
+license-url: "https://github.com/manishthatte/NanoTCAD_ViDES/blob/main/license.txt"
+version: 1.0-py313
+references:
+  - type: software
+    title: NanoTCAD ViDES
+    authors:
+      - family-names: Fiori
+        given-names: Gianluca
+        affiliation: University of Pisa
+      - family-names: Iannaccone
+        given-names: Giuseppe
+        affiliation: University of Pisa
+    url: "http://vides.nanotcad.com/vides/"
+    notes: >-
+      The original simulator. Copyright 2004-2010, University of
+      Pisa. This product includes software developed by G. Fiori
+      and G. Iannaccone at the University of Pisa.

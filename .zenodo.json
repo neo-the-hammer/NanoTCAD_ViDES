@@ -1,0 +1,47 @@
+{
+  "title": "NanoTCAD ViDES, ported to Python 3.13, NumPy 2.x and GCC 14",
+  "version": "1.0-py313",
+  "upload_type": "software",
+  "license": "BSD-4-Clause",
+  "access_right": "open",
+  "language": "eng",
+  "creators": [
+    {
+      "name": "Thatte, Manish Jagdish",
+      "affiliation": "maniTLab, Nashik, Maharashtra, India",
+      "orcid": "0009-0003-8050-1242"
+    }
+  ],
+  "description": "<p><strong>This record covers the port, not the simulator.</strong></p><p><strong>NanoTCAD ViDES</strong> is a self-consistent NEGF (Non-Equilibrium Green's Function) and Poisson solver for nanoscale device simulation, developed by <strong>Prof. Gianluca Fiori and Prof. Giuseppe Iannaccone at the University of Pisa</strong> (&copy; 2004&ndash;2010, University of Pisa). All of the physics, the numerics and the scientific design are theirs. The original is at <a href=\"http://vides.nanotcad.com/vides/\">vides.nanotcad.com</a>.</p><p>The original source targets Python 2.7 and the NumPy 1.x C API, and therefore does not build or run on a current system. This work is a compatibility port that makes it usable again on modern toolchains, and claims authorship of nothing else.</p><p>What was changed:</p><ul><li><strong>Python 2 to Python 3 C API</strong> &mdash; PyInt_AsLong and PyInt_FromLong replaced by their PyLong equivalents; PyString_AsString replaced via PyUnicode_AsEncodedString and PyBytes_AsString; Py_InitModule replaced by PyModule_Create with a PyModuleDef, under PY_MAJOR_VERSION guards.</li><li><strong>NumPy 1.x to 2.x C API</strong> &mdash; PyArray_DOUBLE, PyArray_CDOUBLE and PyArray_INT replaced by their NPY_ equivalents; PyArray_FromDimsAndData replaced by PyArray_SimpleNewFromData through a compatibility shim; the NumPy header path updated from numpy/core/include to numpy/_core/include.</li><li><strong>GCC 14</strong> &mdash; builds under the stricter defaults of a current compiler.</li></ul><p>Verified against the original physics: a (10,0) zigzag carbon nanotube returns a bandgap of 0.9795 eV.</p><p>Redistributed under the original University of Pisa licence, which is retained unmodified in license.txt. In accordance with its acknowledgement clause: <em>this product includes software developed by G. Fiori and G. Iannaccone at the University of Pisa.</em></p>",
+  "keywords": [
+    "NanoTCAD",
+    "ViDES",
+    "NEGF",
+    "non-equilibrium Green's function",
+    "Poisson solver",
+    "TCAD",
+    "device simulation",
+    "nanoelectronics",
+    "carbon nanotube",
+    "graphene nanoribbon",
+    "quantum transport",
+    "Python 3 port",
+    "NumPy 2",
+    "software preservation"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "http://vides.nanotcad.com/vides/",
+      "relation": "isDerivedFrom",
+      "resource_type": "software",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://github.com/manishthatte/NanoTCAD_ViDES",
+      "relation": "isSupplementTo",
+      "resource_type": "software",
+      "scheme": "url"
+    }
+  ],
+  "notes": "This is a compatibility port. The original NanoTCAD ViDES is the work of Gianluca Fiori and Giuseppe Iannaccone at the University of Pisa, copyright 2004-2010, and is redistributed here under its own licence with that licence retained unmodified. The depositor claims authorship only of the Python 3.13, NumPy 2.x and GCC 14 compatibility changes, and is not affiliated with the University of Pisa. The original authors are not listed as creators of this record because they were not involved in preparing it."
+}
