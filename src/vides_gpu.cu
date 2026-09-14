@@ -355,9 +355,12 @@ static void ws_free(Ws *w)
 }
 
 /* Allocate and record, so a failure part-way through still unwinds. */
+#define WS_MAX_ALLOCS 48
+
 static int ws_alloc(Ws *w, void **slot, size_t bytes)
 {
   if (bytes == 0) { *slot = NULL; return 0; }
+  if (w->nowned >= WS_MAX_ALLOCS) return -1;   /* table full: bug guard */
   if (cudaMalloc(slot, bytes) != cudaSuccess) { *slot = NULL; return -1; }
   cudaMemset(*slot, 0, bytes);
   w->owned[w->nowned++] = *slot;
@@ -483,7 +486,13 @@ extern "C" int vides_gpu_batch_size(const vides_rgf_desc *desc)
 /* dst = inv(src) for NB matrices.  getrf overwrites its input, so src is
    staged through a scratch buffer.  Layout needs no attention here:
    inv(X^T) == inv(X)^T, so a row-major buffer inverts in place. */
+/* dst_stride is the distance in elements between consecutive energies in
+   dst.  It is nn for a compact scratch buffer, but Nc*nn when writing one
+   block of gl or gr, whose per-energy slabs are Nc blocks apart.  Getting
+   this wrong silently scribbles across the whole array, so it is explicit
+   rather than assumed. */
 static int inv_rm(cublasHandle_t h, Ws *w, cuDoubleComplex *dst,
+                  long long dst_stride,
                   const cuDoubleComplex *src, int n, int NB)
 {
   size_t nn = (size_t)n * n;
@@ -492,7 +501,7 @@ static int inv_rm(cublasHandle_t h, Ws *w, cuDoubleComplex *dst,
   CUDA_TRY(cudaMemcpy(w->lu, src, (size_t)NB * nn * sizeof(cuDoubleComplex),
                       cudaMemcpyDeviceToDevice));
   k_fill_ptrs<<<pb, TPB>>>(w->p_lu,  w->lu, nn, NB);
-  k_fill_ptrs<<<pb, TPB>>>(w->p_dst, dst,   nn, NB);
+  k_fill_ptrs<<<pb, TPB>>>(w->p_dst, dst, (size_t)dst_stride, NB);
 
   CUBLAS_TRY(cublasZgetrfBatched(h, n, w->p_lu, n, w->ipiv, w->info, NB));
   k_accum_info<<<pb, TPB>>>(w->flag, w->info, NB);
@@ -539,7 +548,7 @@ extern "C" int vides_rgf_batch_gpu(const vides_rgf_desc *desc,
 
   cublasHandle_t h = NULL;
   Ws w; memset(&w, 0, sizeof w);
-  w.owned = (void **)calloc(40, sizeof(void *));
+  w.owned = (void **)calloc(WS_MAX_ALLOCS, sizeof(void *));
   if (!w.owned) return -2;
 
   WS_ALLOC(diag,  (size_t)Nc * nn * cz);
@@ -650,7 +659,7 @@ extern "C" int vides_rgf_batch_gpu(const vides_rgf_desc *desc,
   /* ---- left-going sweep: gl ------------------------------------- */
   /* gl[0] = inv(d_0),  gl[i] = inv(d_i - low[i] gl[i-1] up[i-1])     */
   k_build_d<<<nblk(bnn), TPB>>>(w.t1, w.diag, w.sig_s, w.E, desc->eta, n, NB, lake);
-  TRY(inv_rm(h, &w, w.gl, w.t1, n, NB));
+  TRY(inv_rm(h, &w, w.gl, sG, w.t1, n, NB));
 
   for (int i = 1; i < Nc; i++) {
     CUBLAS_TRY(gemm_rm(h, w.t1, sB, w.gl + (size_t)(i - 1) * nn, sG,
@@ -660,14 +669,14 @@ extern "C" int vides_rgf_batch_gpu(const vides_rgf_desc *desc,
                                   (i == Nc - 1) ? w.sig_d : NULL,
                                   w.E, desc->eta, n, NB, lake);
     k_sub<<<nblk(bnn), TPB>>>(w.t4, w.t3, w.t2, bnn);
-    TRY(inv_rm(h, &w, w.gl + (size_t)i * nn, w.t4, n, NB));
+    TRY(inv_rm(h, &w, w.gl + (size_t)i * nn, sG, w.t4, n, NB));
   }
 
   /* ---- right-going sweep: gr (STD and MODE only) ----------------- */
   if (!lake) {
     k_build_d<<<nblk(bnn), TPB>>>(w.t1, w.diag + (size_t)(Nc - 1) * nn,
                                   w.sig_d, w.E, desc->eta, n, NB, 0);
-    TRY(inv_rm(h, &w, w.gr + (size_t)(Nc - 1) * nn, w.t1, n, NB));
+    TRY(inv_rm(h, &w, w.gr + (size_t)(Nc - 1) * nn, sG, w.t1, n, NB));
 
     for (int i = Nc - 2; i >= 0; i--) {
       CUBLAS_TRY(gemm_rm(h, w.t1, sB, w.gr + (size_t)(i + 1) * nn, sG,
@@ -677,7 +686,7 @@ extern "C" int vides_rgf_batch_gpu(const vides_rgf_desc *desc,
                                     (i == 0) ? w.sig_s : NULL,
                                     w.E, desc->eta, n, NB, 0);
       k_sub<<<nblk(bnn), TPB>>>(w.t4, w.t3, w.t2, bnn);
-      TRY(inv_rm(h, &w, w.gr + (size_t)i * nn, w.t4, n, NB));
+      TRY(inv_rm(h, &w, w.gr + (size_t)i * nn, sG, w.t4, n, NB));
     }
   }
 
@@ -727,7 +736,7 @@ extern "C" int vides_rgf_batch_gpu(const vides_rgf_desc *desc,
       CUBLAS_TRY(gemm_rm(h, w.t2, sB, w.up, s0, w.t1, sB, n, NB));
       CUBLAS_TRY(gemm_rm(h, w.t3, sB, w.gl, sG, w.t2, sB, n, NB));
       k_id_axpy<<<nblk(bnn), TPB>>>(w.t4, w.t3, -1.0, n, NB);
-      TRY(inv_rm(h, &w, w.t1, w.t4, n, NB));
+      TRY(inv_rm(h, &w, w.t1, sB, w.t4, n, NB));
       CUBLAS_TRY(gemm_rm(h, Gcur, sB, w.t1, sB, w.gl, sG, n, NB));
 
       SPECTRAL(w.A1, Gcur, w.g1, so);

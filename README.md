@@ -178,10 +178,20 @@ environment with no GPU, no `nvcc`, and no network access to install one, so
 what has actually been verified is:
 
 - every new and modified C source compiles clean (`gcc -fsyntax-only`);
-- `vides_gpu.cu` passes a host-side C++ type check against stub CUDA headers
-  (this already caught one real bug — an operator-precedence error in the
-  batch-size calculation that would have silently disabled the GPU);
+- `vides_gpu.cu` passes a host-side C++ type check against stub CUDA headers;
 - the makefile parses and selects the right objects with and without `GPU=1`.
+
+Two real bugs were found and fixed by review rather than by running code,
+which is a fair indication of the residual risk:
+
+- an operator-precedence error (`+` binding tighter than `<<`) in the
+  batch-size calculation, which would have made the device look
+  permanently out of memory and silently disabled the GPU;
+- the batched inversion built its destination pointers with a stride of
+  `n*n`, but four of its five call sites write one block of `gl`/`gr`,
+  whose per-energy slabs are `Nc*n*n` apart. Every inversion after the
+  first energy would have landed in the wrong place and corrupted the
+  array.
 
 What has **not** been verified is that it compiles under `nvcc`, that the
 kernels are correct, or that it is faster. Run `test/test_gpu_vs_cpu.py`
