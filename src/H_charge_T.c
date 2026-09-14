@@ -7,6 +7,7 @@
 // ====================================================================== 
 
 #include "H_charge_T.h"
+#include "vides_rgf_batch.h"
 #include <time.h>
 static PyObject* py_H_charge_T(PyObject* self, PyObject* args)
 {
@@ -304,184 +305,145 @@ static PyObject* py_H_charge_T(PyObject* self, PyObject* args)
   
   E=Elower;
 
+  // The energy points are independent of one another, so instead of one
+  // NEGF solve per energy they are handed to vides_rgf_batch() a chunk at
+  // a time.  This path uses the Lake recursion, matching the LDOS_Lake()
+  // call it replaces.  With a GPU present the chunk becomes the batch
+  // dimension of the cuBLAS batched calls; without one the driver loops
+  // over the chunk calling the same LDOS_Lake() as before.
+  {
+    vides_rgf_desc vdesc;
+    complex ***SSch,***SDch;
+    double *Ech,*A1ch,*A2ch,*Tch;
+    int NBmax,nb,ib;
 
-  while (E<=(Eupper+dE*0.5)){
-    
-/* 
-  Use the following 2 lines for Umerski method
-*/
-    
-/*
-    SIGMAS=selfH(E, DIAG[0], temp0, temp2, temp3, n, eta);
-    SIGMAD=selfH(E, DIAG[0], temp0, UPDIAG[1], temp1, n, eta);
-*/
-    
-/*
-  The following two lines are for the Mike method a la Schur.
-  lead = 0(1) corresponds to right(left) lead
-*/
+    vdesc.n=NUM;
+    vdesc.Nc=Nc;
+    vdesc.NB=1;
+    vdesc.variant=VIDES_RGF_LAKE;
+    vdesc.flagtrans=1;
+    vdesc.eta=eta;
+    vdesc.Nreal=0;
+    vdesc.order=NULL;
 
+    NBmax=vides_negf_chunk(&vdesc);
+    if (NBmax>NE) NBmax=NE;
+    if (NBmax<1) NBmax=1;
 
+    if (!rank) printf("NEGF backend: %s, %d energies per batch \n",
+                      vides_gpu_describe(),NBmax);
 
-//    (void) time(&t1);     
-//    SIGMAS = selfH_W(E, DIAG, UPDIAG, LOWDIAG, NUM, Nc,0, eta);
-    //SIGMAS = selfH_new(E, DIAG, UPDIAG, LOWDIAG, NUM, Nc,0, eta);
-    //    (void) time(&t2);
+    Ech =(double *)malloc((size_t)NBmax*sizeof(double));
+    Tch =(double *)malloc((size_t)NBmax*sizeof(double));
+    SSch=(complex ***)malloc((size_t)NBmax*sizeof(complex **));
+    SDch=(complex ***)malloc((size_t)NBmax*sizeof(complex **));
+    A1ch=(double *)malloc((size_t)NBmax*Nc*NUM*sizeof(double));
+    A2ch=(double *)malloc((size_t)NBmax*Nc*NUM*sizeof(double));
+    if (!Ech||!Tch||!SSch||!SDch||!A1ch||!A2ch)
+      {
+        printf("Out of memory allocating the NEGF energy batch \n");
+        exit(0);
+      }
 
-    /*    FILE *fp3;
-    fp3=fopen("time.out","w");
-    fprintf(fp3,"%d ", (int) t2-t1);
-    fclose(fp3);
+    while (E<=(Eupper+dE*0.5)){
 
-    char *s = "Hello from CNT_charge_T";
-    return Py_BuildValue("s", s);
+      // I fill one chunk of energies, building the Self-Energy for each.
+      // lead = 0(1) corresponds to right(left) lead.
+      nb=0;
+      while ((nb<NBmax)&&(E<=(Eupper+dE*0.5)))
+        {
+          SSch[nb] = selfH_new(E, DIAG, UPDIAG, LOWDIAG, NUM, Nc,0, eta);
+          SDch[nb] = selfH_new(E, DIAG, UPDIAG, LOWDIAG, NUM, Nc,1, eta);
+          Ech[nb]=E;
+          nb++;
+          E+=dE;
+        }
 
-    printf("time LDOS on rank %d = %d secs \n", rank,(int) t2-t1);
+      vdesc.NB=nb;
+      if (vides_rgf_batch(&vdesc,Ech,DIAG,UPDIAG,LOWDIAG,SSch,SDch,
+                          A1ch,A2ch,Tch)!=0)
+        {
+          printf("NEGF batch failed \n");
+          exit(0);
+        }
 
-    */
+      for (ib=0;ib<nb;ib++)
+        {
+          double Eb,*A1b,*A2b;
+          Eb=Ech[ib];
+          A1b=A1ch+(size_t)ib*Nc*NUM;
+          A2b=A2ch+(size_t)ib*Nc*NUM;
 
-    //    SIGMAS = selfH_W(E, DIAG, UPDIAG, LOWDIAG, NUM, Nc,0, eta);
-    //SIGMAD = selfH_W(E, DIAG, UPDIAG, LOWDIAG, NUM, Nc,1, eta);
+          cfree_cmatrix(SSch[ib],0,NUM-1,0,NUM-1);
+          cfree_cmatrix(SDch[ib],0,NUM-1,0,NUM-1);
 
-    SIGMAS = selfH_new(E, DIAG, UPDIAG, LOWDIAG, NUM, Nc,0, eta);
-    SIGMAD = selfH_new(E, DIAG, UPDIAG, LOWDIAG, NUM, Nc,1, eta);
-
-
-    //    SIGMAS=cmatrix(0,NUM-1,0,NUM-1);
-    //    SIGMAD=cmatrix(0,NUM-1,0,NUM-1);
-    
-    //   SIGMAS[0][1]=SIGMAD[1][0];
-    //   SIGMAS[1][0]=SIGMAD[0][1];
-    
-    //    FILE *fp;
-/*     fp=fopen("sigmas.Re","w"); */
-/*     for (i=0;i<NUM;i++) */
-/*       { */
-/* 	for (j=0;j<NUM;j++) */
-/* 	  fprintf(fp,"%lg ",SIGMAS[i][j].r); */
-/* 	fprintf(fp,"\n"); */
-/*       } */
-/*     fclose(fp); */
-
-/*     fp=fopen("sigmas.Im","w"); */
-/*     for (i=0;i<NUM;i++) */
-/*       { */
-/* 	for (j=0;j<NUM;j++) */
-/* 	  fprintf(fp,"%lg ",SIGMAS[i][j].i); */
-/* 	fprintf(fp,"\n"); */
-/*       } */
-/*     fclose(fp); */
-    
-
-/*     printf("sigmas \n"); */
-/*     fp=fopen("sigmas","w"); */
-/*     for (i=0;i<NUM;i++) */
-/*       { */
-/* 	for (j=0;j<NUM;j++) */
-/* 	  fprintf(fp,"%lg+i%lg ",SIGMAS[i][j].r,SIGMAS[i][j].i); */
-/* 	fprintf(fp,"\n"); */
-/*       } */
-/*     fclose(fp); */
-    
-/*     printf("sigmad \n"); */
-/*     fp=fopen("sigmad","w"); */
-/*     for (i=0;i<NUM;i++) */
-/*       { */
-/* 	for (j=0;j<NUM;j++) */
-/* 	  fprintf(fp,"%lg+i%lg ",SIGMAD[i][j].r,SIGMAD[i][j].i); */
-/* 	fprintf(fp,"\n"); */
-/*       } */
-/*     fclose(fp); */
-
-/*    exit(0); */
-
-//    SIGMAD = selfH_W_Cells(E, DIAG[0], UPDIAG[0], n, eta);
-//    SIGMAS = selfH_W_Cells(E, DIAG[0], LOWDIAG[1], n, eta);
-
-/*
-  I print out the energy level for which 
-  the computation is performed every 50 energy levels
-*/
-    /* if ((ie%50)==0) */
-/*       {       */
-/* 	printf("\r"); */
-/* 	printf("Energy %lg ",E); */
-/*       } */
-    
-    LDOS_Lake(E,LOWDIAG,DIAG,UPDIAG,&A1,&A2,SIGMAS,SIGMAD,NUM,Nc,1,&T,0,eta);
-    //LDOS(E,LOWDIAG,DIAG,UPDIAG,&A1,&A2,SIGMAS,SIGMAD,NUM,Nc,1,&T,0,eta);
-
-    //A1=dmatrix(0,Nc-1,0,n-1);
-    //A2=dmatrix(0,Nc-1,0,n-1);
-
-    cfree_cmatrix(SIGMAS,0,NUM-1,0,NUM-1);
-    cfree_cmatrix(SIGMAD,0,NUM-1,0,NUM-1);
-    
-    // Compute the charge
-    for (i=0;i<Nc;i++){
-      for (j=0;j<n;j++)
-	{
-	  // electrons
-	  ix=j+i*n;
+            // Compute the charge
+            for (i=0;i<Nc;i++){
+              for (j=0;j<n;j++)
+        	{
+        	  // electrons
+        	  ix=j+i*n;
 	  
-	  // For each atom, I sum over the total number of orbitals
-	  A1sum=0;
-	  A2sum=0;
-	  for (k=0;k<orbitals;k++)
-	    {
-	      A1sum+=A1[i][k+j*orbitals];
-	      A2sum+=A2[i][k+j*orbitals];
-	    }
+        	  // For each atom, I sum over the total number of orbitals
+        	  A1sum=0;
+        	  A2sum=0;
+        	  for (k=0;k<orbitals;k++)
+        	    {
+        	      A1sum+=A1b[i*NUM+k+j*orbitals];
+        	      A2sum+=A2b[i*NUM+k+j*orbitals];
+        	    }
 
-	  if (A1sum>=1e-40)
-	    if ((E>=Ei[j+i*n]))
-	      {
-		ncarcnt[ix]=ncarcnt[ix]
-		  -2*(
-		      A1sum*Fermi_Dirac((E-(mu1))/(vt))*dE);
-	      }
+        	  if (A1sum>=1e-40)
+        	    if ((Eb>=Ei[j+i*n]))
+        	      {
+        		ncarcnt[ix]=ncarcnt[ix]
+        		  -2*(
+        		      A1sum*Fermi_Dirac((Eb-(mu1))/(vt))*dE);
+        	      }
 
-	  if (A2sum>=1e-40)
-	    if ((E>=Ei[j+i*n]))
-	      {
-		ncarcnt[ix]=ncarcnt[ix]
-		  -2*(
-		      A2sum*Fermi_Dirac((E-(mu2))/(vt))*dE);
-	      }
+        	  if (A2sum>=1e-40)
+        	    if ((Eb>=Ei[j+i*n]))
+        	      {
+        		ncarcnt[ix]=ncarcnt[ix]
+        		  -2*(
+        		      A2sum*Fermi_Dirac((Eb-(mu2))/(vt))*dE);
+        	      }
 	  
-	  //holes
-	  if (A1sum>=1e-40)
-	    if ((E<Ei[j+i*n]))
-	      {
-		ncarcnt[ix]=ncarcnt[ix]
-		  +2*(
-		      A1sum*(1-Fermi_Dirac((E-(mu1))/(vt)))*dE);
-	      }
+        	  //holes
+        	  if (A1sum>=1e-40)
+        	    if ((Eb<Ei[j+i*n]))
+        	      {
+        		ncarcnt[ix]=ncarcnt[ix]
+        		  +2*(
+        		      A1sum*(1-Fermi_Dirac((Eb-(mu1))/(vt)))*dE);
+        	      }
 	  
-	  if (A2sum>=1e-40)
-	    if ((E<Ei[j+i*n]))
-	      {
-		ncarcnt[ix]=ncarcnt[ix]
-		  +2*(
-		      A2sum*(1-Fermi_Dirac((E-(mu2))/(vt)))*dE);
-	      }
-	  // last modifications
-	  //	  DOS[ix][ie]+=A1sum+A2sum;
+        	  if (A2sum>=1e-40)
+        	    if ((Eb<Ei[j+i*n]))
+        	      {
+        		ncarcnt[ix]=ncarcnt[ix]
+        		  +2*(
+        		      A2sum*(1-Fermi_Dirac((Eb-(mu2))/(vt)))*dE);
+        	      }
+        	  // last modifications
+        	  //	  DOS[ix][ie]+=A1sum+A2sum;
 	  
-	}
-    }  
+        	}
+            }  
     
-    EE[ie]=E;
-    TE[ie]=T;
-   
-    E+=dE;
-    ie++;
 
-    free_dmatrix(A1,0,Nc-1,0,NUM-1);
-    free_dmatrix(A2,0,Nc-1,0,NUM-1);    
+          EE[ie]=Eb;
+          TE[ie]=Tch[ib];
+          ie++;
+        }
+    }
 
-
-
+    free(Ech);
+    free(Tch);
+    free(SSch);
+    free(SDch);
+    free(A1ch);
+    free(A2ch);
   }
 
   if (!rank) printf("\n\n*****************************************\n");

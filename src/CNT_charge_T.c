@@ -43,6 +43,7 @@
 //
 //
 #include "CNT_charge_T.h"
+#include "vides_rgf_batch.h"
 static PyObject* py_CNT_charge_T(PyObject* self, PyObject* args)
 {
   int i,j,k,ix,ie,*order,Nm,icse,NE,n,Nc,nx,rank;
@@ -231,90 +232,149 @@ static PyObject* py_CNT_charge_T(PyObject* self, PyObject* args)
 
   E=Elower;
 
-  while (E<=(Eupper+dE*0.5))
-    {
-      
-      
-      // I create the Self-Energy in case of Schottky barrier contacts 
-      // or doped reservoirs
-      
-      if (strcasecmp(CNTboundary,"doped")==0)
-	{
-	  SIGMAS=selfanalitical(E,-Phi[0],n,Nm,order,thop,eta);
-	  SIGMAD=selfanalitical(E,-Phi[(Nc-1)*n],n,Nm,order,thop,eta);
-	}
-      else
-	{
-	  SIGMAS=selfschottky(E,(mu1),n,thop,eta);
-	  SIGMAD=selfschottky(E,(mu2),n,thop,eta);
-	}
+  // The energy points are independent of one another, so instead of one
+  // NEGF solve per energy they are handed to vides_rgf_batch() a chunk at
+  // a time.  With a GPU present that chunk becomes the batch dimension of
+  // the cuBLAS batched calls; without one the driver simply loops over the
+  // chunk calling the same LDOS() as before, so the numbers are unchanged.
+  {
+    vides_rgf_desc vdesc;
+    complex ***SSch,***SDch;
+    double *Ech,*A1ch,*A2ch,*Tch;
+    int NBmax,nb,ib;
 
-      // I print out the energy level for which 
-      // the computation is performed every 50 energy levels
-      if ((ie%50)==0)
-	{      
-	  if (!rank) printf("\r");
-	  if (!rank) printf("%lg ",E);
-	}
+    vdesc.n=n;
+    vdesc.Nc=Nc;
+    vdesc.NB=1;
+    vdesc.variant=VIDES_RGF_STD;
+    vdesc.flagtrans=1;
+    vdesc.eta=eta;
+    vdesc.Nreal=0;
+    vdesc.order=NULL;
 
-      // I compute the DOS and the trasmission coefficient for the 
-      // given energy E
-      // and passing the tridiagonal block matrix representing the Hamiltonian
-      // changed by sign. LDOS is passed back in A1 (LDOS for states 
-      // from the left) and in A2 (LDOS for states from the right
-      LDOS(E,LOWDIAG,DIAG,UPDIAG,&A1,&A2,SIGMAS,SIGMAD,n,Nc,1,&T,thop,eta);
-      
-      cfree_cmatrix(SIGMAS,0,n-1,0,n-1);
-      cfree_cmatrix(SIGMAD,0,n-1,0,n-1);
-      
-      // I compute the charge
-      for (i=0;i<Nc;i++)
-	for (j=0;j<n;j++)
-	  {
-	    // electrons (+sign)
-	    ix=j+i*n;
-	    if ((E>=-Phi[j+i*n]))
-	      {
-		ncarcnt[ix]=ncarcnt[ix]
-		  -2*(
-		      A1[i][j]*Fermi_Dirac((E-(mu1))/(vt))*dE);
-	      }
-	    
-	    if ((E>=-Phi[j+i*n]))
-	      {
-		ncarcnt[ix]=ncarcnt[ix]
-		  -2*(
-		      A2[i][j]*Fermi_Dirac((E-(mu2))/(vt))*dE);
-	      }
-	    
-	    //holes (- sign)
-	    if ((E<-Phi[j+i*n]))
-	      {
-		ncarcnt[ix]=ncarcnt[ix]
-		  +2*(
-		      A1[i][j]*(1-Fermi_Dirac((E-(mu1))/(vt)))*dE);
-	      }
-	    
-	    if ((E<-Phi[j+i*n]))
-	      {
-		ncarcnt[ix]=ncarcnt[ix]
-		  +2*(
-		      A2[i][j]*(1-Fermi_Dirac((E-(mu2))/(vt)))*dE);
-	      }
-	    // last modifications
-	    
-	  }
-      
-      EE[ie]=E;
-      TE[ie]=T;
-  
-      E+=dE;
-      ie++;
-      free_dmatrix(A1,0,Nc-1,0,n-1);
-      free_dmatrix(A2,0,Nc-1,0,n-1);
-      
-    }
-  
+    NBmax=vides_negf_chunk(&vdesc);
+    if (NBmax>NE) NBmax=NE;
+    if (NBmax<1) NBmax=1;
+
+    if (!rank) printf("NEGF backend: %s, %d energies per batch \n",
+                      vides_gpu_describe(),NBmax);
+
+    Ech =(double *)malloc((size_t)NBmax*sizeof(double));
+    Tch =(double *)malloc((size_t)NBmax*sizeof(double));
+    SSch=(complex ***)malloc((size_t)NBmax*sizeof(complex **));
+    SDch=(complex ***)malloc((size_t)NBmax*sizeof(complex **));
+    A1ch=(double *)malloc((size_t)NBmax*Nc*n*sizeof(double));
+    A2ch=(double *)malloc((size_t)NBmax*Nc*n*sizeof(double));
+    if (!Ech||!Tch||!SSch||!SDch||!A1ch||!A2ch)
+      {
+        printf("Out of memory allocating the NEGF energy batch \n");
+        exit(0);
+      }
+
+    while (E<=(Eupper+dE*0.5))
+      {
+        // I fill one chunk of energies, building the Self-Energy for each
+        // in case of Schottky barrier contacts or doped reservoirs
+        nb=0;
+        while ((nb<NBmax)&&(E<=(Eupper+dE*0.5)))
+          {
+            if (strcasecmp(CNTboundary,"doped")==0)
+              {
+                SSch[nb]=selfanalitical(E,-Phi[0],n,Nm,order,thop,eta);
+                SDch[nb]=selfanalitical(E,-Phi[(Nc-1)*n],n,Nm,order,thop,eta);
+              }
+            else
+              {
+                SSch[nb]=selfschottky(E,(mu1),n,thop,eta);
+                SDch[nb]=selfschottky(E,(mu2),n,thop,eta);
+              }
+            Ech[nb]=E;
+            nb++;
+            E+=dE;
+          }
+
+        // I compute the DOS and the transmission coefficient for every
+        // energy in the chunk, passing the tridiagonal block matrix
+        // representing the Hamiltonian changed by sign.  A1ch holds the
+        // LDOS for states from the left and A2ch from the right.
+        vdesc.NB=nb;
+        if (vides_rgf_batch(&vdesc,Ech,DIAG,UPDIAG,LOWDIAG,SSch,SDch,
+                            A1ch,A2ch,Tch)!=0)
+          {
+            printf("NEGF batch failed \n");
+            exit(0);
+          }
+
+        for (ib=0;ib<nb;ib++)
+          {
+            double Eb,*A1b,*A2b;
+            Eb=Ech[ib];
+            A1b=A1ch+(size_t)ib*Nc*n;
+            A2b=A2ch+(size_t)ib*Nc*n;
+
+            // I print out the energy level for which
+            // the computation is performed every 50 energy levels
+            if ((ie%50)==0)
+              {
+                if (!rank) printf("\r");
+                if (!rank) printf("%lg ",Eb);
+              }
+
+            cfree_cmatrix(SSch[ib],0,n-1,0,n-1);
+            cfree_cmatrix(SDch[ib],0,n-1,0,n-1);
+
+            // I compute the charge
+            for (i=0;i<Nc;i++)
+              for (j=0;j<n;j++)
+                {
+                  // electrons (+sign)
+                  ix=j+i*n;
+                  if ((Eb>=-Phi[j+i*n]))
+                    {
+                      ncarcnt[ix]=ncarcnt[ix]
+                        -2*(
+                            A1b[i*n+j]*Fermi_Dirac((Eb-(mu1))/(vt))*dE);
+                    }
+
+                  if ((Eb>=-Phi[j+i*n]))
+                    {
+                      ncarcnt[ix]=ncarcnt[ix]
+                        -2*(
+                            A2b[i*n+j]*Fermi_Dirac((Eb-(mu2))/(vt))*dE);
+                    }
+
+                  //holes (- sign)
+                  if ((Eb<-Phi[j+i*n]))
+                    {
+                      ncarcnt[ix]=ncarcnt[ix]
+                        +2*(
+                            A1b[i*n+j]*(1-Fermi_Dirac((Eb-(mu1))/(vt)))*dE);
+                    }
+
+                  if ((Eb<-Phi[j+i*n]))
+                    {
+                      ncarcnt[ix]=ncarcnt[ix]
+                        +2*(
+                            A2b[i*n+j]*(1-Fermi_Dirac((Eb-(mu2))/(vt)))*dE);
+                    }
+                  // last modifications
+
+                }
+
+            EE[ie]=Eb;
+            TE[ie]=Tch[ib];
+            ie++;
+          }
+      }
+
+    free(Ech);
+    free(Tch);
+    free(SSch);
+    free(SDch);
+    free(A1ch);
+    free(A2ch);
+  }
+
   if (!rank) printf("\n\n*********************************\n");
   if (!rank) printf("****** END OF NEGF in CNT *******\n"); 
   if (!rank) printf("*********************************\n\n");

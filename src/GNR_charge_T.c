@@ -47,6 +47,7 @@
 //
 
 #include "GNR_charge_T.h"
+#include "vides_rgf_batch.h"
 static PyObject* py_GNR_charge_T(PyObject* self, PyObject* args)
 {
   int i,j,k,ix,ie,Nm,icse,NE,n,Nc,nx,rank;
@@ -252,136 +253,200 @@ static PyObject* py_GNR_charge_T(PyObject* self, PyObject* args)
       }
 
   E=Elower;
-  while (E<=(Eupper+dE*0.5))
-    {
-      
-      // I create the Self-Energy in case of Schottky barrier contacts
-      // or doped contacts
-      if (strcasecmp(GNRboundary,"doped")==0)
-	{
-	  SIGMAS=selfGNR(E,passos,n,thop,eta);
-	  SIGMAD=selfGNR(E,passod,n,thop,eta);
-	}
-      else
-	{
-	  SIGMAS=selfschottky(E,(mu1),n,thop,eta);
-	  SIGMAD=selfschottky(E,(mu2),n,thop,eta);
-	}
 
-      // I print out the energy level for which 
-      // the computation is performed every 50 energy levels
-      if ((ie%50)==0)
-	{      
-	  if (!rank) printf("\r");
-	  if (!rank) printf("%lg ",E);
-	}
-      
-      LDOS(E,LOWDIAG,DIAG,UPDIAG,&A1,&A2,SIGMAS,SIGMAD,n,Nc,1,&T,thop,eta);
-      
-      cfree_cmatrix(SIGMAS,0,n-1,0,n-1);
-      cfree_cmatrix(SIGMAD,0,n-1,0,n-1);
-      
-      // I compute the charge
-      for (i=0;i<Nc;i++)
-	for (j=0;j<n;j++)
-	  /* { */
-/* 	    // electrons */
-/* 	    ix=j+i*n; */
-/* 	    if ((A1[i][j]>=1e-40)) */
-/* 	      if ((E>=-Phi[j+i*n])) */
-/* 		{ */
-/* 		  arg1=A1[i][j]*Fermi_Dirac((E-(mu1))/(vt)); */
-/* 		  arg2=A1old[i][j]*Fermi_Dirac((E-dE-(mu1))/(vt)); */
-/* 		  ncarcnt[ix]=ncarcnt[ix] */
-/* 		    +2*(2*arg1)*dE/2; */
-/* 		} */
-	    
-/* 	    if ((A2[i][j]>=1e-40)) */
-/* 	      if ((E>=-Phi[j+i*n])) */
-/* 		{ */
-/* 		  arg1=A2[i][j]*Fermi_Dirac((E-(mu2))/(vt)); */
-/* 		  arg2=A2old[i][j]*Fermi_Dirac((E-dE-(mu2))/(vt)); */
-/* 		  ncarcnt[ix]=ncarcnt[ix] */
-/* 		    +2*(2*arg1)*dE/2; */
-/* 		} */
-	    
-/* 	    // last modifications */
-/* 	    //holes */
-/* 	    if ((A1[i][j]>=1e-40)) */
-/* 	      if ((E<-Phi[j+i*n])) */
-/* 		{ */
-/* 		  arg1=A1[i][j]*(1-Fermi_Dirac((E-(mu1))/(vt))); */
-/* 		  arg2=A1old[i][j]*(1-Fermi_Dirac((E-dE-(mu1))/(vt))); */
-/* 		  ncarcnt[ix]=ncarcnt[ix] */
-/* 		    -2*(2*arg1)*dE/2; */
-/* 		} */
-	    
-/* 	    if ((A2[i][j]>=1e-40)) */
-/* 	      if ((E<-Phi[j+i*n])) */
-/* 		{ */
-/* 		  arg1=A2[i][j]*(1-Fermi_Dirac((E-(mu2))/(vt))); */
-/* 		  arg2=A2old[i][j]*(1-Fermi_Dirac((E-dE-(mu2))/(vt))); */
-/* 		  ncarcnt[ix]=ncarcnt[ix] */
-/* 		    -2*(2*arg1)*dE/2; */
-/* 		} */
-/* 	    // last modifications */
-	    
-/* 	  } */
+  // The energy points are independent of one another, so instead of one
+  // NEGF solve per energy they are handed to vides_rgf_batch() a chunk at
+  // a time.  With a GPU present that chunk becomes the batch dimension of
+  // the cuBLAS batched calls; without one the driver simply loops over the
+  // chunk calling the same LDOS() as before, so the numbers are unchanged.
+  {
+    vides_rgf_desc vdesc;
+    complex ***SSch,***SDch;
+    double *Ech,*A1ch,*A2ch,*Tch;
+    int NBmax,nb,ib;
 
-	  {
-	    // electrons
-	    ix=j+i*n;
-	    if (A1[i][j]>=1e-40)
-	      if ((E>=-Phi[j+i*n]))
-		{
-		  ncarcnt[ix]=ncarcnt[ix]
-		    -2*(
-			A1[i][j]*Fermi_Dirac((E-(mu1))/(vt))*dE);
-		}
-	    if (A2[i][j]>=1e-40)
-	      if ((E>=-Phi[j+i*n]))
-		{
-		  ncarcnt[ix]=ncarcnt[ix]
-		    -2*(
-			A2[i][j]*Fermi_Dirac((E-(mu2))/(vt))*dE);
-		}
-	    
-	    //holes
-	    if (A1[i][j]>=1e-40)
-	      if ((E<-Phi[j+i*n]))
-		{
-		  ncarcnt[ix]=ncarcnt[ix]
-		    +2*(
-			A1[i][j]*(1-Fermi_Dirac((E-(mu1))/(vt)))*dE);
-		}
-	    
-	    if (A2[i][j]>=1e-40)
-	      if ((E<-Phi[j+i*n]))
-		{
-		  ncarcnt[ix]=ncarcnt[ix]
-		    +2*(
-			A2[i][j]*(1-Fermi_Dirac((E-(mu2))/(vt)))*dE);
-		}
-	    // last modifications
-	    
-	  }
-      
-      EE[ie]=E;
-      TE[ie]=T;
+    vdesc.n=n;
+    vdesc.Nc=Nc;
+    vdesc.NB=1;
+    vdesc.variant=VIDES_RGF_STD;
+    vdesc.flagtrans=1;
+    vdesc.eta=eta;
+    vdesc.Nreal=0;
+    vdesc.order=NULL;
 
-      E+=dE;
-      ie++;
+    NBmax=vides_negf_chunk(&vdesc);
+    if (NBmax>NE) NBmax=NE;
+    if (NBmax<1) NBmax=1;
 
-      for (i=0;i<Nc;i++)
-	for (j=0;j<n;j++)
-	  {
-	    A1old[i][j]=A1[i][j];
-	    A2old[i][j]=A2[i][j];
-	  }
-      free_dmatrix(A1,0,Nc-1,0,n-1);
-      free_dmatrix(A2,0,Nc-1,0,n-1);
+    if (!rank) printf("NEGF backend: %s, %d energies per batch \n",
+                      vides_gpu_describe(),NBmax);
+
+    Ech =(double *)malloc((size_t)NBmax*sizeof(double));
+    Tch =(double *)malloc((size_t)NBmax*sizeof(double));
+    SSch=(complex ***)malloc((size_t)NBmax*sizeof(complex **));
+    SDch=(complex ***)malloc((size_t)NBmax*sizeof(complex **));
+    A1ch=(double *)malloc((size_t)NBmax*Nc*n*sizeof(double));
+    A2ch=(double *)malloc((size_t)NBmax*Nc*n*sizeof(double));
+    if (!Ech||!Tch||!SSch||!SDch||!A1ch||!A2ch)
+      {
+        printf("Out of memory allocating the NEGF energy batch \n");
+        exit(0);
+      }
+
+    while (E<=(Eupper+dE*0.5))
+      {
+        // I fill one chunk of energies, building the Self-Energy for each
+        // in case of Schottky barrier contacts or doped contacts
+        nb=0;
+        while ((nb<NBmax)&&(E<=(Eupper+dE*0.5)))
+          {
+            if (strcasecmp(GNRboundary,"doped")==0)
+              {
+                SSch[nb]=selfGNR(E,passos,n,thop,eta);
+                SDch[nb]=selfGNR(E,passod,n,thop,eta);
+              }
+            else
+              {
+                SSch[nb]=selfschottky(E,(mu1),n,thop,eta);
+                SDch[nb]=selfschottky(E,(mu2),n,thop,eta);
+              }
+            Ech[nb]=E;
+            nb++;
+            E+=dE;
+          }
+
+        vdesc.NB=nb;
+        if (vides_rgf_batch(&vdesc,Ech,DIAG,UPDIAG,LOWDIAG,SSch,SDch,
+                            A1ch,A2ch,Tch)!=0)
+          {
+            printf("NEGF batch failed \n");
+            exit(0);
+          }
+
+        for (ib=0;ib<nb;ib++)
+          {
+            double Eb,*A1b,*A2b;
+            Eb=Ech[ib];
+            A1b=A1ch+(size_t)ib*Nc*n;
+            A2b=A2ch+(size_t)ib*Nc*n;
+
+            // I print out the energy level for which
+            // the computation is performed every 50 energy levels
+            if ((ie%50)==0)
+              {
+                if (!rank) printf("\r");
+                if (!rank) printf("%lg ",Eb);
+              }
+
+            cfree_cmatrix(SSch[ib],0,n-1,0,n-1);
+            cfree_cmatrix(SDch[ib],0,n-1,0,n-1);
+
+            // I compute the charge
+            for (i=0;i<Nc;i++)
+      	for (j=0;j<n;j++)
+      	  /* { */
+      /* 	    // electrons */
+      /* 	    ix=j+i*n; */
+      /* 	    if ((A1b[i*n+j]>=1e-40)) */
+      /* 	      if ((Eb>=-Phi[j+i*n])) */
+      /* 		{ */
+      /* 		  arg1=A1b[i*n+j]*Fermi_Dirac((Eb-(mu1))/(vt)); */
+      /* 		  arg2=A1old[i][j]*Fermi_Dirac((E-dE-(mu1))/(vt)); */
+      /* 		  ncarcnt[ix]=ncarcnt[ix] */
+      /* 		    +2*(2*arg1)*dE/2; */
+      /* 		} */
+	    
+      /* 	    if ((A2b[i*n+j]>=1e-40)) */
+      /* 	      if ((Eb>=-Phi[j+i*n])) */
+      /* 		{ */
+      /* 		  arg1=A2b[i*n+j]*Fermi_Dirac((Eb-(mu2))/(vt)); */
+      /* 		  arg2=A2old[i][j]*Fermi_Dirac((E-dE-(mu2))/(vt)); */
+      /* 		  ncarcnt[ix]=ncarcnt[ix] */
+      /* 		    +2*(2*arg1)*dE/2; */
+      /* 		} */
+	    
+      /* 	    // last modifications */
+      /* 	    //holes */
+      /* 	    if ((A1b[i*n+j]>=1e-40)) */
+      /* 	      if ((Eb<-Phi[j+i*n])) */
+      /* 		{ */
+      /* 		  arg1=A1b[i*n+j]*(1-Fermi_Dirac((Eb-(mu1))/(vt))); */
+      /* 		  arg2=A1old[i][j]*(1-Fermi_Dirac((E-dE-(mu1))/(vt))); */
+      /* 		  ncarcnt[ix]=ncarcnt[ix] */
+      /* 		    -2*(2*arg1)*dE/2; */
+      /* 		} */
+	    
+      /* 	    if ((A2b[i*n+j]>=1e-40)) */
+      /* 	      if ((Eb<-Phi[j+i*n])) */
+      /* 		{ */
+      /* 		  arg1=A2b[i*n+j]*(1-Fermi_Dirac((Eb-(mu2))/(vt))); */
+      /* 		  arg2=A2old[i][j]*(1-Fermi_Dirac((E-dE-(mu2))/(vt))); */
+      /* 		  ncarcnt[ix]=ncarcnt[ix] */
+      /* 		    -2*(2*arg1)*dE/2; */
+      /* 		} */
+      /* 	    // last modifications */
+	    
+      /* 	  } */
+
+      	  {
+      	    // electrons
+      	    ix=j+i*n;
+      	    if (A1b[i*n+j]>=1e-40)
+      	      if ((Eb>=-Phi[j+i*n]))
+      		{
+      		  ncarcnt[ix]=ncarcnt[ix]
+      		    -2*(
+      			A1b[i*n+j]*Fermi_Dirac((Eb-(mu1))/(vt))*dE);
+      		}
+      	    if (A2b[i*n+j]>=1e-40)
+      	      if ((Eb>=-Phi[j+i*n]))
+      		{
+      		  ncarcnt[ix]=ncarcnt[ix]
+      		    -2*(
+      			A2b[i*n+j]*Fermi_Dirac((Eb-(mu2))/(vt))*dE);
+      		}
+	    
+      	    //holes
+      	    if (A1b[i*n+j]>=1e-40)
+      	      if ((Eb<-Phi[j+i*n]))
+      		{
+      		  ncarcnt[ix]=ncarcnt[ix]
+      		    +2*(
+      			A1b[i*n+j]*(1-Fermi_Dirac((Eb-(mu1))/(vt)))*dE);
+      		}
+	    
+      	    if (A2b[i*n+j]>=1e-40)
+      	      if ((Eb<-Phi[j+i*n]))
+      		{
+      		  ncarcnt[ix]=ncarcnt[ix]
+      		    +2*(
+      			A2b[i*n+j]*(1-Fermi_Dirac((Eb-(mu2))/(vt)))*dE);
+      		}
+      	    // last modifications
+	    
+      	  }
       
-    }
+
+            EE[ie]=Eb;
+            TE[ie]=Tch[ib];
+            ie++;
+
+            for (i=0;i<Nc;i++)
+              for (j=0;j<n;j++)
+                {
+                  A1old[i][j]=A1b[i*n+j];
+                  A2old[i][j]=A2b[i*n+j];
+                }
+          }
+      }
+
+    free(Ech);
+    free(Tch);
+    free(SSch);
+    free(SDch);
+    free(A1ch);
+    free(A2ch);
+  }
 
   if (!rank) printf("\n\n*********************************\n");
   if (!rank) printf("****** END OF NEGF in GNR *******\n"); 

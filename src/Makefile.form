@@ -4,6 +4,39 @@ endif
 
 CC      =       gcc
 FF      =       gfortran
+
+# ----------------------------------------------------------------------
+# GPU backend (opt-in).  Build with:  make GPU=1
+#
+# Leaving GPU unset builds exactly what it always did: vides_gpu_stub.o
+# stands in for the CUDA backend and reports no device, so the NEGF driver
+# stays on the CPU.  Nothing about the CPU path changes either way.
+#
+# CUDA_ARCH below sticks to what CUDA 11 can emit and covers Pascal through
+# Ampere, with a PTX fallback so newer cards still run.  Override it (or
+# CUDA_HOME) on the command line if your toolkit or card needs something
+# else, e.g.  make GPU=1 CUDA_ARCH="-arch=sm_75"
+# ----------------------------------------------------------------------
+ifndef GPU
+GPU = 0
+endif
+
+ifeq ($(GPU),1)
+NVCC      ?=      nvcc
+CUDA_HOME ?=      /usr/local/cuda
+CUDA_ARCH ?=      -gencode arch=compute_60,code=sm_60 \
+                  -gencode arch=compute_70,code=sm_70 \
+                  -gencode arch=compute_75,code=sm_75 \
+                  -gencode arch=compute_80,code=sm_80 \
+                  -gencode arch=compute_86,code=sm_86 \
+                  -gencode arch=compute_86,code=compute_86
+NVCCFLAGS ?=      -O3 -Xcompiler -fPIC $(CUDA_ARCH)
+GPU_OBJ    =      vides_gpu.o
+GPU_LIBS   =      -L$(CUDA_HOME)/lib64 -lcudart -lcublas
+else
+GPU_OBJ    =      vides_gpu_stub.o
+GPU_LIBS   =
+endif
 ifeq ($(GOTOBLAS),1)
 CFLAGS  =       -fPIC -O3 -std=gnu89 -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-return-mismatch -DPyArray_DOUBLE=NPY_DOUBLE -DPyArray_CDOUBLE=NPY_CDOUBLE -DPyArray_INT=NPY_INT -DPyInt_AsLong=PyLong_AsLong -DPyInt_FromLong=PyLong_FromLong '-DPyString_AsString(o)=PyBytes_AsString(PyUnicode_AsEncodedString(o,"utf-8","strict"))' -llapack 
 FFLAGS  =       -fPIC -O3 -fallow-argument-mismatch -std=legacy -llapack 
@@ -17,7 +50,7 @@ FFMPI   =       mpif77
 INCPY	=	{INCPY}
 INCNPY	= 	{INCNPY}
 
-OBJECTS =	nrutil.o nonuniformgridmod.o complass.o cmatrix.o cvectorm.o max.o create_updiag.o create_lowdiag.o cfree_cmatrix.o cfree_cvectorm.o min.o selfanalitical.o selfschottky.o LDOS.o create_beta1.o create_beta2mode.o create_beta2transpmode.o VAVdaga.o ccmul.o ccadd.o ccsub.o cdmul.o ccsqrt.o ccdiv.o cIm.o cRe.o cmatsub.o rgfblock.o spectralfun.o cfree_ctensor4.o transmission.o cmatdaga.o Fermi_Dirac.o csub.o csum.o ctensor4.o cmatinv.o cmatmul.o cmatsum.o cdabs.o cmatrixm.o ccvector.o cfree_ccvector.o cmatmul3.o cmatRe.o create_beta2.o create_beta2transp.o NanoTCAD_ViDESmod.o LDOSmode.o create_updiagmode.o create_lowdiagmode.o selfanaliticalmode.o VdagaAV.o energysort.o spectralfunmode.o dsort.f create_updiagGNR.o create_lowdiagGNR.o selfGNR.o gappo.o create_beta1GNR.o create_beta2GNR.o create_beta2transpGNR.o Gzerozero.o cmatnorm2diff.o  nanotube.o create_J.o ffunpoisson.o preparej.o Jbuild.o domn.o abbs.o indice.o norma2.o destroy_J.o stampaout.o graphenedown.o
+OBJECTS =	vides_rgf_batch.o nrutil.o nonuniformgridmod.o complass.o cmatrix.o cvectorm.o max.o create_updiag.o create_lowdiag.o cfree_cmatrix.o cfree_cvectorm.o min.o selfanalitical.o selfschottky.o LDOS.o create_beta1.o create_beta2mode.o create_beta2transpmode.o VAVdaga.o ccmul.o ccadd.o ccsub.o cdmul.o ccsqrt.o ccdiv.o cIm.o cRe.o cmatsub.o rgfblock.o spectralfun.o cfree_ctensor4.o transmission.o cmatdaga.o Fermi_Dirac.o csub.o csum.o ctensor4.o cmatinv.o cmatmul.o cmatsum.o cdabs.o cmatrixm.o ccvector.o cfree_ccvector.o cmatmul3.o cmatRe.o create_beta2.o create_beta2transp.o NanoTCAD_ViDESmod.o LDOSmode.o create_updiagmode.o create_lowdiagmode.o selfanaliticalmode.o VdagaAV.o energysort.o spectralfunmode.o dsort.f create_updiagGNR.o create_lowdiagGNR.o selfGNR.o gappo.o create_beta1GNR.o create_beta2GNR.o create_beta2transpGNR.o Gzerozero.o cmatnorm2diff.o  nanotube.o create_J.o ffunpoisson.o preparej.o Jbuild.o domn.o abbs.o indice.o norma2.o destroy_J.o stampaout.o graphenedown.o
 
 OBJECTS_BLAS_LAPACK = slamch.o csscal.o cswap.o ccopy.o cdotc.o cdotu.o cgemm.o cgemv.o  cscal.o  ctrmm.o ctrmv.o icamax.o scnrm2.o  caxpy.o cgerc.o scabs1.o ilaclc.o ilaclr.o icmax1.o zgeev.o isamax.o scasum.o sscal.o ctrsv.o zdscal.o dlamch.o idamax.o dznrm2.o zcopy.o zaxpy.o ilazlc.o ilazlr.o zgerc.o dzasum.o dscal.o zdotu.o zdotc.o ztrsv.o zggev.o zhgeqz.o zgghrd.o ztgevc.o zggbak.o zlanhs.o zggbal.f zgeqrf.o zgeqr2.o zlarfp.o zgges.o ztgsen.o zlacn2.o ztgexc.o ztgex2.o ztgsyl.o ztgsy2.o zlatdf.o zgetc2.o zgecon.o zdrscl.o dzsum1.o zgesc2.o izmax1.o inversion.o
 
@@ -32,19 +65,19 @@ GOTOBLAS = 0
 endif
 
 ifeq ($(GOTOBLAS),1)
-all:	$(OBJECTS) $(OBJECTS_REL_1.1) $(OBJECTS_REL_1.2)  $(OBJECTS_REL_1.4) NanoTCAD_ViDESmod
+all:	$(OBJECTS) $(OBJECTS_REL_1.1) $(OBJECTS_REL_1.2)  $(OBJECTS_REL_1.4) $(GPU_OBJ) NanoTCAD_ViDESmod
 else
-all:	$(OBJECTS) $(OBJECTS_BLAS_LAPACK) $(OBJECTS_REL_1.1) $(OBJECTS_REL_1.2) $(OBJECTS_REL_1.4) NanoTCAD_ViDESmod
+all:	$(OBJECTS) $(OBJECTS_BLAS_LAPACK) $(OBJECTS_REL_1.1) $(OBJECTS_REL_1.2) $(OBJECTS_REL_1.4) $(GPU_OBJ) NanoTCAD_ViDESmod
 endif
 
 $(OBJECTS) : 	
 
 ifeq ($(GOTOBLAS),1)
-NanoTCAD_ViDESmod   : $(OBJECTS) $(OBJECTS_REL_1.1) $(OBJECTS_REL_1.2) $(OBJECTS_REL_1.4) NanoTCAD_ViDESmod.o
-	$(FF) $(CFLAGS) -shared -o NanoTCAD_ViDESmod.so $(OBJECTS) $(OBJECTS_REL_1.1) $(OBJECTS_REL_1.2) $(OBJECTS_REL_1.4) -lm $(NOMAIN) {LIB} -lgoto2 -lgfortran -lpthread
+NanoTCAD_ViDESmod   : $(OBJECTS) $(OBJECTS_REL_1.1) $(OBJECTS_REL_1.2) $(OBJECTS_REL_1.4) $(GPU_OBJ) NanoTCAD_ViDESmod.o
+	$(FF) $(CFLAGS) -shared -o NanoTCAD_ViDESmod.so $(OBJECTS) $(OBJECTS_REL_1.1) $(OBJECTS_REL_1.2) $(OBJECTS_REL_1.4) $(GPU_OBJ) -lm $(NOMAIN) {LIB} -lgoto2 -lgfortran -lpthread $(GPU_LIBS)
 else
-NanoTCAD_ViDESmod   : $(OBJECTS) $(OBJECTS_BLAS_LAPACK) $(OBJECTS_REL_1.1) $(OBJECTS_REL_1.2) $(OBJECTS_REL_1.4)  NanoTCAD_ViDESmod.o
-	$(FF) $(CFLAGS) -shared -o NanoTCAD_ViDESmod.so $(OBJECTS) $(OBJECTS_BLAS_LAPACK) $(OBJECTS_REL_1.1) $(OBJECTS_REL_1.2) $(OBJECTS_REL_1.4) -lm $(NOMAIN) {LIB} 
+NanoTCAD_ViDESmod   : $(OBJECTS) $(OBJECTS_BLAS_LAPACK) $(OBJECTS_REL_1.1) $(OBJECTS_REL_1.2) $(OBJECTS_REL_1.4) $(GPU_OBJ) NanoTCAD_ViDESmod.o
+	$(FF) $(CFLAGS) -shared -o NanoTCAD_ViDESmod.so $(OBJECTS) $(OBJECTS_BLAS_LAPACK) $(OBJECTS_REL_1.1) $(OBJECTS_REL_1.2) $(OBJECTS_REL_1.4) $(GPU_OBJ) -lm $(NOMAIN) {LIB} $(GPU_LIBS) 
 endif
 
 comp  :
@@ -55,6 +88,9 @@ clean :
 	rm -f *.o
 	rm -f *.so	
 	rm -f core
+
+vides_gpu.o : vides_gpu.cu vides_rgf_batch.h complex.h
+	$(NVCC) $(NVCCFLAGS) -I. -c vides_gpu.cu -o vides_gpu.o
 
 sub_fermi.o : sub_fermi.f
 	$(FF) $(FFLAGS) -I$(INCPY) -I$(INCNPY) -finit-local-zero -fno-automatic -c sub_fermi.f
